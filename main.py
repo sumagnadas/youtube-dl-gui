@@ -2,18 +2,21 @@
 import youtube_dl
 import sys
 import pandas as pd
+import tempfile
 
 from youtube_search import YoutubeSearch
+from pathlib import Path
 from urllib import request
-from os.path import abspath, exists
-from os import system
-from PySide2.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
+from os.path import abspath
+from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
                                QVBoxLayout, QHBoxLayout, QLineEdit,
                                QSizePolicy, QMenu, QFrame, QFileDialog,
                                QTabWidget, QTableView, QMainWindow)
-from PySide2.QtGui import QImage, QPixmap
-from PySide2.QtCore import (Qt, QThread, QAbstractTableModel,
+from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import (Qt, QThread, QAbstractTableModel,
                             QObject, Signal, Slot)
+
+threads = list()
 
 
 class SignalManager(QObject):
@@ -94,8 +97,8 @@ class BGThread(QThread):
     so that the GUI doesn't freeze.
     """
 
-    def __init__(self, ydl, url):
-        QThread.__init__(self)
+    def __init__(self, ydl, url, parent=None):
+        super().__init__(parent=parent)
         self.ydl, self.url = ydl, url
         self.started = False
 
@@ -188,10 +191,12 @@ class Video(QFrame):
         """
         Set the title and thumbnail for the frame
         """
-        if not exists(f"/tmp/.video{c}.jpg") or image_url != self.thumbUrl:
+        global tempdir
+        image = Path(tempdir.name) / f".video{c}.jpg"
+        if not image.exists() or image_url != self.thumbUrl:
             # save the thumbnail if it doesn't exist
-            request.urlretrieve(image_url, f"/tmp/.video{c}.jpg")
-        self.image.load(f"/tmp/.video{c}.jpg")  # load the thumbnail
+            request.urlretrieve(image_url, str(image))
+        self.image.load(str(image))  # load the thumbnail
         self.thumbUrl = image_url
         self.image_cont.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.image_cont.setPixmap(QPixmap().fromImage(
@@ -372,10 +377,6 @@ class Window(QWidget):
 
         self.setWindowTitle("Youtube Downloader")  # Set the window title
 
-    def closeEvent(self, e):
-        # remove the downloaded thumbnails
-        system("rm /tmp/.video*.jpg")
-
 
 def showProgress(download, row, signal):
     """
@@ -396,6 +397,7 @@ def download(widget, url):
     Download the video with the user-specified options
     to the selected location
     """
+    global threads
     # If the video is being downloaded from an URL, then hide everything
     # in the "Results" tab
     # if it is not already shown
@@ -472,7 +474,8 @@ def download(widget, url):
     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
         if ok:
             # create the thread for the download
-            widget.downloader = BGThread(ydl, url)
+            widget.downloader = BGThread(ydl, url, widget)
+            threads.append(widget.downloader)
             widget.model.addRow()  # add a row to the table on "Downloads" tab
 
             # Set the data in the empty row
@@ -492,6 +495,7 @@ def download(widget, url):
 
 if __name__ == "__main__":
     app = QApplication(["Youtube Downloader"])
+    tempdir = tempfile.TemporaryDirectory()
 
     # Create the main window
     mainwindow = QMainWindow()
@@ -502,10 +506,19 @@ if __name__ == "__main__":
                               Qt.WindowTitleHint | Qt.WindowSystemMenuHint |
                               Qt.WindowMinimizeButtonHint |
                               Qt.WindowCloseButtonHint)
+
     # Show the GUI application
     mainwindow.show()
 
     try:
-        sys.exit(app.exec_())
+        app.exec_()
+
+        # Stop the threads which are downloading files
+        for thread in threads:
+            thread.terminate()
+            thread.wait()
+
+        # Exit the program
+        sys.exit(0)
     except Exception:
         sys.exit(1)
